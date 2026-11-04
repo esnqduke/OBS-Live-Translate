@@ -50,20 +50,20 @@ const SupportedModel *supported_model(FILE *file,const std::atomic<bool> &stoppi
 }
 }
 
-bool CompletedSegmentQueue::push(std::vector<float> &&phrase,uint64_t utterance)
+bool CompletedSegmentQueue::push(std::vector<float> &&phrase,uint64_t utterance,uint64_t generation)
 {
  std::lock_guard<std::mutex> lock(mutex);
  if(phrase.empty() || phrase.size()>max_samples-samples)return false;
- auto count=phrase.size();phrases.push_back({std::move(phrase),utterance,true});samples+=count;
+ auto count=phrase.size();phrases.push_back({std::move(phrase),utterance,true,generation});samples+=count;
  finalized=std::max(finalized,utterance);
  if(partial.utterance<=finalized)partial.pcm.clear();
  return true;
 }
-void CompletedSegmentQueue::push_partial(std::vector<float> &&phrase,uint64_t utterance)
+void CompletedSegmentQueue::push_partial(std::vector<float> &&phrase,uint64_t utterance,uint64_t generation)
 {
  std::lock_guard<std::mutex> lock(mutex);
  if(utterance<=finalized || phrase.empty() || phrase.size()>240000)return;
- partial={std::move(phrase),utterance,false};
+ partial={std::move(phrase),utterance,false,generation};
 }
 void CompletedSegmentQueue::cancel_partial(uint64_t utterance)
 {
@@ -75,13 +75,13 @@ bool CompletedSegmentQueue::current_partial(uint64_t utterance) const
 {
  std::lock_guard<std::mutex> lock(mutex);return utterance>finalized;
 }
-bool CompletedSegmentQueue::finish_partial(uint64_t utterance)
+bool CompletedSegmentQueue::finish_partial(uint64_t utterance,uint64_t generation)
 {
  std::lock_guard<std::mutex> lock(mutex);
  if(utterance<=finalized)return true;
  if(phrases.size()>=512)return false;
  finalized=utterance;if(partial.utterance<=finalized)partial.pcm.clear();
- phrases.push_back({{},utterance,true});return true;
+ phrases.push_back({{},utterance,true,generation});return true;
 }
 bool CompletedSegmentQueue::pop(RecognitionInput &input)
 {
@@ -100,6 +100,11 @@ bool CompletedSegmentQueue::pop(std::vector<float> &phrase)
 size_t CompletedSegmentQueue::pending_samples() const
 {
  std::lock_guard<std::mutex> lock(mutex);return samples;
+}
+
+void CompletedSegmentQueue::clear(uint64_t through)
+{
+ std::lock_guard<std::mutex> lock(mutex);phrases.clear();partial={};samples=0;finalized=std::max(finalized,through);
 }
 
 void TranscriptionWorker::start(const std::filesystem::path &model,unsigned threads,ResultCallback callback,bool translate_to_english,bool use_gpu)
@@ -199,28 +204,31 @@ void TranscriptionWorker::run(const std::filesystem::path &path,unsigned threads
   try{
    AudioResampler resampler;SpeechSegmenter segmenter;AudioBlock block;
    uint64_t generation=0,last_drops=baseline_drops,utterance=1;uint32_t rate=0;size_t channels=0;
-   bool partial_started=false;
+   bool partial_started=false;uint64_t capture_generation=this->generation();
    while(!stopping && !capture_done){
+    const auto token=this->generation();
+    if(token!=capture_generation){segments.clear(utterance++);resampler.reset();segmenter.reset();partial_started=false;rate=0;channels=0;capture_generation=token;}
     auto drops=queue.dropped();
     if(drops!=last_drops){callback({WorkerEvent::Status,"Overflow"});last_drops=drops;}
     if(!queue.pop(block)){std::this_thread::sleep_for(std::chrono::milliseconds(2));continue;}
+    if((token&1) || block.capture_generation!=token)continue;
     converted_frames.fetch_add(block.frames,std::memory_order_relaxed);
     if(block.discontinuity || block.generation!=generation || block.rate!=rate || block.channels!=channels){
      if(partial_started){
-      if(!segments.finish_partial(utterance)){accepting=false;capture_failed=true;callback({WorkerEvent::Error,"BacklogFull"});break;}
+      if(!segments.finish_partial(utterance,capture_generation)){accepting=false;capture_failed=true;callback({WorkerEvent::Error,"BacklogFull"});break;}
      }else segments.cancel_partial(utterance);
      ++utterance;partial_started=false;
      resampler.reset();segmenter.reset();generation=block.generation;rate=block.rate;channels=block.channels;
     }
     auto phrase=segmenter.feed(resampler.convert(block));
     if(!phrase.empty()){
-     if(!segments.push(std::move(phrase),utterance++)){
+     if(!segments.push(std::move(phrase),utterance++,capture_generation)){
       accepting=false;capture_failed=true;callback({WorkerEvent::Error,"BacklogFull"});break;
      }
      ++completed;
      partial_started=false;
     }
-    if(translate_to_english){auto snapshot=segmenter.take_partial();if(!snapshot.empty()){partial_started=true;segments.push_partial(std::move(snapshot),utterance);}}
+    if(translate_to_english){auto snapshot=segmenter.take_partial();if(!snapshot.empty()){partial_started=true;segments.push_partial(std::move(snapshot),utterance,capture_generation);}}
    }
   }catch(const std::exception &e){accepting=false;capture_failed=true;callback({WorkerEvent::Error,e.what()});}
   catch(...){accepting=false;capture_failed=true;callback({WorkerEvent::Error,"CaptureFailed"});}
@@ -249,20 +257,20 @@ void TranscriptionWorker::run(const std::filesystem::path &path,unsigned threads
    if(capture_failed)break;
    std::this_thread::sleep_for(std::chrono::milliseconds(5));continue;
   }
+  if(paused() || input.generation!=generation())continue;
   if(!input.final && !segments.current_partial(input.utterance))continue;
-  if(input.final && input.pcm.empty()){callback({WorkerEvent::Text,"",input.utterance});continue;}
+  if(input.final && input.pcm.empty()){callback({WorkerEvent::Text,"",input.utterance,input.generation});continue;}
   if(input.final && !capture_failed)callback({WorkerEvent::Status,processing});
   auto params=inference_params();
-  struct PartialAbort {std::atomic<bool> *stopping;CompletedSegmentQueue *segments;uint64_t utterance;};
-  PartialAbort abort{&stopping,&segments,input.utterance};
-  if(!input.final){
-   params.abort_callback=[](void *p){auto *a=static_cast<PartialAbort *>(p);return a->stopping->load() || !a->segments->current_partial(a->utterance);};
-   params.abort_callback_user_data=&abort;
-  }
+  struct InferenceAbort {TranscriptionWorker *worker;CompletedSegmentQueue *segments;uint64_t utterance,generation;bool final;};
+  InferenceAbort abort{this,&segments,input.utterance,input.generation,input.final};
+  params.abort_callback=[](void *p){auto *a=static_cast<InferenceAbort *>(p);return a->worker->stopping.load() || a->worker->generation()!=a->generation || (!a->final && !a->segments->current_partial(a->utterance));};
+  params.abort_callback_user_data=&abort;
   auto before=std::chrono::steady_clock::now();
   int result=whisper_full(ctx.get(),params,input.pcm.data(),int(input.pcm.size()));
   auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-before).count();
   if(stopping)break;
+  if(paused() || generation()!=input.generation)continue;
   if(!input.final && !segments.current_partial(input.utterance))continue;
   if(result!=0){callback({WorkerEvent::Error,"InferenceFailed"});break;}
   if(input.final)++transcribed;
@@ -271,9 +279,9 @@ void TranscriptionWorker::run(const std::filesystem::path &path,unsigned threads
   auto first=text.find_first_not_of(" \t\r\n");
   if(first!=std::string::npos){
    text=text.substr(first,text.find_last_not_of(" \t\r\n")-first+1);
-   callback({input.final?WorkerEvent::Text:WorkerEvent::PartialText,std::move(text),input.utterance});
+   callback({input.final?WorkerEvent::Text:WorkerEvent::PartialText,std::move(text),input.utterance,input.generation});
    if(!input.final)++partial_updates;
-  }else if(input.final)callback({WorkerEvent::Text,"",input.utterance});
+  }else if(input.final)callback({WorkerEvent::Text,"",input.utterance,input.generation});
   if(input.final){
    diagnostics(elapsed,input.pcm.size());
    if(!capture_failed)callback({WorkerEvent::Status,listening});

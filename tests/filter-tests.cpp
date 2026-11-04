@@ -15,7 +15,7 @@ int main(){try{
  animation.style="cyber";check(animation_frame(animation,origin)!=animation.animation_text,"cyber starts with transient glitch");
  check(animation_frame(animation,origin+std::chrono::seconds(1))==animation.animation_text,"cyber settles to readable text");
 
- auto *style_props=registered.get_properties(nullptr);check(style_props->entries.count("caption_style"),"animated caption style selector available");delete style_props;
+ auto *style_props=registered.get_properties(nullptr);check(style_props->entries.count("caption_style"),"animated caption style selector available");check(style_props->entries.count("caption_reading_ms") && style_props->entries.count("caption_max_rows") && style_props->entries.count("clear_captions"),"caption timing, rows and clear controls available");delete style_props;
  check(std::string(registered.id)=="obs_live_translate_transcription_filter","registration id");
  check(registered.type==OBS_SOURCE_TYPE_FILTER && registered.output_flags==OBS_SOURCE_AUDIO,"audio registration");
  check(registered.filter_audio!=nullptr,"audio callback registered");
@@ -24,6 +24,18 @@ int main(){try{
  settings.strings["output_source_name"]="captions";
  auto *f=static_cast<Filter *>(registered.create(&settings,&microphone));
  check(f->mailbox->status=="ModelMissing","empty path status");
+ obs_source_t parent;microphone.parent=&parent;
+ auto mute_box=f->mailbox;post(mute_box,{WorkerEvent::Text,"private speech",21});drain();
+ parent.muted=true;registered.video_tick(f,0.05f);drain();
+ check(written.empty(),"parent mute must immediately clear subtitles");
+ post(mute_box,{WorkerEvent::Text,"late private result",21});drain();
+ check(written.empty(),"muted source must reject late recognition results");
+ parent.muted=false;registered.video_tick(f,0.05f);drain();
+ check(mute_box->status=="ModelMissing","unmute preserves model availability status");
+ post(mute_box,{WorkerEvent::Text,"old result after unmute",21});drain();
+ check(written.empty(),"unmute must not revive results from before mute");
+ registered.destroy(f);drain();f=static_cast<Filter *>(registered.create(&settings,&microphone));updates=0;
+
  obs_audio_data data;float samples[480]={0.25f};data.data[0]=reinterpret_cast<uint8_t *>(samples);data.frames=480;
  check(registered.filter_audio(f,&data)==&data && samples[0]==0.25f,"exact pass through");
  f->enabled=true;
@@ -36,8 +48,8 @@ int main(){try{
  post(box,{WorkerEvent::Error,"BacklogFull"});
  post(box,{WorkerEvent::Status,"Listening"});post(box,{WorkerEvent::Status,"Recognizing"});
  check(box->status=="BacklogFull","terminal capture error must survive racing inference status");
- post(box,{WorkerEvent::Text,"stale"});registered.update(f,&settings);drain();
- check(updates==2 && written.empty(),"reconfiguration cancels pending text and clears owned caption");
+ post(box,{WorkerEvent::Text,"stale"});settings.threads=3;registered.update(f,&settings);drain();
+ check(updates==2 && written.empty(),"reconfiguration cancels pending text and clears owned caption");settings.threads=2;registered.update(f,&settings);drain();
  post(f->mailbox,{WorkerEvent::Text,"missing"});output_exists=false;drain();
  check(f->mailbox->status=="OutputMissing" && updates==2,"deleted output safe");output_exists=true;
  output.id="other";post(f->mailbox,{WorkerEvent::Text,"wrong type"});drain();check(updates==2,"reject non GDI source");output.id="text_gdiplus";
@@ -59,9 +71,9 @@ int main(){try{
  obs_data_set_bool(&settings,"use_gpu",true);registered.update(f,&settings);check(f->use_gpu,"GPU setting applies");
  obs_data_set_bool(&settings,"use_gpu",false);registered.update(f,&settings);check(!f->use_gpu,"CPU setting can be restored");
  drain();
- check(caption_hold_ms("Hi")==2000 && caption_hold_ms(std::string(50,'x'))==4000 && caption_hold_ms(std::string(1000,'x'))==7000,"reading time grows with length and caps at seven seconds");
+ check(CaptionOptions{}.reading("Hi")==3000 && CaptionOptions{}.reading(std::string(50,'x'))==4000,"default reading time grows with length");
  std::string unicode;for(int i=0;i<50;i++)unicode+="\xD1\x8F";
- check(caption_hold_ms(unicode)==4000,"reading time counts Unicode characters, not UTF8 bytes");
+ check(CaptionOptions{}.reading(unicode)==4000,"reading time counts Unicode characters, not UTF8 bytes");
  box=f->mailbox;
  post(box,{WorkerEvent::PartialText,"first partial"});drain();check(written=="first partial","partial is visible without final event");
  auto deadline=box->expires;
@@ -165,5 +177,47 @@ int main(){try{
  auto before_destroy=updates;
  post(f->mailbox,{WorkerEvent::Text,"destroyed"});registered.destroy(f);drain();check(updates==before_destroy,"destroy cancels pending UI");
  check(references==0,"balanced references");
+ // Live display settings must preserve the worker/mailbox and use actual GDI+ timing.
+ obs_data_t controls;registered.get_defaults(&controls);controls.strings["output_source_name"]="captions";
+ obs_source_t control_source;control_source.parent=&parent;
+ auto *controlled=static_cast<Filter *>(registered.create(&controls,&control_source));drain();
+ auto control_box=controlled->mailbox;
+ obs_data_set_int(&controls,"caption_reading_ms",500);obs_data_set_int(&controls,"caption_character_ms",0);
+ obs_data_set_int(&controls,"caption_line_interval_ms",0);obs_data_set_int(&controls,"caption_max_rows",1);
+ obs_data_set_int(&controls,"caption_font_size",40);obs_data_set_string(&controls,"caption_alignment","right");
+ obs_data_set_bool(&controls,"caption_animations",false);obs_data_set_bool(&controls,"caption_partial_results",false);
+ registered.update(controlled,&controls);check(controlled->mailbox==control_box,"caption controls preserve worker and mailbox");
+ post(control_box,{WorkerEvent::PartialText,"hidden draft",1});drain();check(written.empty(),"partial result switch hides drafts");
+ post(control_box,{WorkerEvent::Text,"visible final",1});drain();
+ check(written=="visible final" && appearance.strings["align"]=="right","configured GDI text and alignment apply");
+ check(appearance.objects["font"]->ints["size"]==40,"configured GDI font size applies");
+ const auto configured_at=control_box->last_frame;
+ expire(control_box,configured_at+std::chrono::milliseconds(499));drain();check(!written.empty(),"configured reading duration protects text");
+ expire(control_box,configured_at+std::chrono::milliseconds(501));drain();check(written.empty(),"configured reading duration expires");
+ auto *original_font=obs_data_create();obs_data_set_string(original_font,"face","Arial");obs_data_set_int(original_font,"size",64);obs_data_set_obj(&appearance,"font",original_font);obs_data_release(original_font);
+ post(control_box,{WorkerEvent::Text,"manual font preview"});drain();check(appearance.objects["font"]->ints["size"]==40,"manual font applies to preview");
+ expire(control_box,control_box->expires);drain();check(appearance.objects["font"]->ints["size"]==64,"plain preview expiry restores source font");
+ post(control_box,{WorkerEvent::Text,"before manual clear",2});drain();reset_captions(controlled,false);drain();
+ check(written.empty(),"manual clear removes native output");
+ post(control_box,{WorkerEvent::Text,"stale after clear",2,0});drain();check(written.empty(),"manual clear rejects in-flight results");
+ post(control_box,{WorkerEvent::Text,"new after clear",3,controlled->worker.generation()});drain();check(written=="new after clear","fresh generation resumes after clear");
+ controlled->worker.set_paused(true);controlled->worker.set_paused(false); // delayed audio snapshot after unmute
+ registered.video_tick(controlled,0.05f);drain();
+ post(control_box,{WorkerEvent::Text,"fresh after audio race",4,controlled->worker.generation()});drain();
+ check(written=="fresh after audio race","mute generation drift must recover fresh output");
+ registered.update(controlled,&controls);drain();
+ check(controlled->mailbox==control_box,"normalized no-op settings must preserve model and unread queue");
+ output.id="browser_source";obs_data_set_string(&controls,"caption_style","console");registered.update(controlled,&controls);
+ check(controlled->mailbox==control_box && connect_browser(controlled),"browser attaches without restarting for display settings");
+ auto retained_browser=control_box->browser;auto retained_url=retained_browser->url();
+ post(control_box,{WorkerEvent::Text,"private browser phrase",4,controlled->worker.generation()});
+ parent.muted=true;registered.video_tick(controlled,0.05f);drain();
+ check(control_box->browser==retained_browser && retained_browser->url()==retained_url && retained_browser->state_json().find("private browser phrase")==std::string::npos,"mute clears browser journal without replacing server or URL");
+ check(retained_browser->state_json().find("\"reset\":")!=std::string::npos,"browser receives reset revision");
+ parent.muted=false;registered.video_tick(controlled,0.05f);drain();
+ post(control_box,{WorkerEvent::Text,"fresh browser phrase",5,controlled->worker.generation()});
+ check(retained_browser->state_json().find("fresh browser phrase")!=std::string::npos,"browser resumes fresh text after unmute");
+ registered.destroy(controlled);drain();output.id="text_gdiplus";
+
  std::cout<<"filter registration, pass through, UI dispatch and lifecycle: PASS\n";
  }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

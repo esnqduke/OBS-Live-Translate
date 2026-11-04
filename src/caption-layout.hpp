@@ -51,7 +51,7 @@ class CaptionLayout {
  }
  void release(){fonts.clear();graphics.reset();for(auto handle:handles)DeleteObject(handle);handles.clear();if(dc)DeleteDC(dc);dc=nullptr;if(token)Gdiplus::GdiplusShutdown(token);token=0;}
 public:
- CaptionLayout(const std::string &name,int size,int flags,int width_px,int height_px){
+ CaptionLayout(const std::string &name,int size,int flags,int width_px,int height_px,int preset_size=64){
   Gdiplus::GdiplusStartupInput startup;
   if(Gdiplus::GdiplusStartup(&token,&startup,nullptr)!=Gdiplus::Ok)throw std::runtime_error("GDI+ unavailable");
   try{
@@ -59,7 +59,7 @@ public:
    graphics=std::make_unique<Gdiplus::Graphics>(dc);
    font(name.empty()?"Arial":name,std::clamp(size,1,2000),flags);
    // All presets fit the same wrapped rows; switching style never reflows history.
-   font("Consolas",64,1);font("Arial",64,1);
+   font("Consolas",preset_size,1);font("Arial",preset_size,1);
    float line_height=0;for(const auto &f:fonts)line_height=std::max(line_height,f->GetHeight(graphics.get()));
    if(height_px<line_height+8)throw std::runtime_error("Caption area too small");
    count=std::min<size_t>(3,size_t((height_px-8)/line_height));

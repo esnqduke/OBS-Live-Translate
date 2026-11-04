@@ -22,7 +22,7 @@ private:
  mutable std::mutex mutex;
  std::map<uint64_t,Phrase> phrases;
  size_t bytes=0;
- uint64_t highest=0,preview_serial=0;
+ uint64_t highest=0,preview_serial=0,reset_serial=0;
  bool active=true;
  std::string session,config="{}",failure,preview_text,background_path;
 public:
@@ -53,10 +53,11 @@ public:
  bool preview(const std::string &text){std::lock_guard<std::mutex> lock(mutex);if(!phrases.empty())return false;preview_text=text;++preview_serial;return true;}
  void configure(const std::string &json,const std::string &image){std::lock_guard<std::mutex> lock(mutex);config=json;background_path=image;}
  std::string image() const{std::lock_guard<std::mutex> lock(mutex);return background_path;}
+ void clear(){std::lock_guard<std::mutex> lock(mutex);phrases.clear();bytes=0;preview_text.clear();failure.clear();++reset_serial;}
  void deactivate(){std::lock_guard<std::mutex> lock(mutex);active=false;phrases.clear();bytes=0;preview_text.clear();}
  std::string state_json() const{
   std::lock_guard<std::mutex> lock(mutex);
-  std::string result="{\"session\":"+browser_json_string(session)+",\"active\":"+(active?"true":"false")+",\"config\":"+config+",\"phrases\":[";
+  std::string result="{\"session\":"+browser_json_string(session)+",\"active\":"+(active?"true":"false")+",\"reset\":"+std::to_string(reset_serial)+",\"config\":"+config+",\"phrases\":[";
   bool first=true;for(const auto &item:phrases){const auto &p=item.second;if(!first)result+=',';first=false;
    result+="{\"id\":"+browser_json_string(std::to_string(p.id))+",\"revision\":"+std::to_string(p.revision)+",\"text\":"+browser_json_string(p.text)+",\"final\":"+(p.final?"true":"false")+"}";
   }

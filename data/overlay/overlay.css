@@ -36,3 +36,5 @@
 [data-tone="light"][data-style="cyber"] #rows{color:#253d55;text-shadow:1px 0 0 #be5b6c33}
 #status{position:absolute;bottom:8px;left:8px;max-width:calc(100% - 16px);padding:7px 11px;background:#211c14e8;border:1px solid #c7a565;color:#ffedbd;font:14px/1.35 "Segoe UI",sans-serif;border-radius:5px;white-space:normal}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+
+[data-animations="false"] [data-style="console"] .row-text:after,[data-animations="false"][data-style="console"] .row:last-child .row-text:after{animation:none}

@@ -30,11 +30,14 @@ Local Russian transcription and Russian → English translation for OBS Studio, 
 | Local inference | Whisper runs inside the DLL; no cloud API, key or separate model server |
 | CPU or Vulkan GPU | Choose the compute mode in the audio filter |
 | Reading comes first | Up to three rows; new lines enter below, previous lines move upward |
-| Time to finish reading | At least three seconds fully readable after entrance effects; longer rows get more time |
+| Time to finish reading | Configurable reading time, per-character timing, row interval and 1?3 visible rows |
+| OBS microphone mute | Cancel recognition, discard buffered speech and clear captions; resume only new speech |
 | Seven visual styles | Plain, Matrix, Console, Cyberpunk, Matrix Rain, Fantasy and Grand Cathay-inspired |
 | Independent backgrounds | Transparent, solid, gradient, parchment, Cathay ornament or a local image |
 | Adjustable appearance | Colors, background opacity, padding, corners, borders and image fit |
 | Offline operation | No internet connection needed after installation and model download |
+
+Caption display controls include animation speed and disable, text size/alignment, partial results, clear and reset. [Full display controls and mute behavior (RU)](docs/CAPTION-CONTROLS-RU.md).
 
 Captions wait their turn instead of replacing unread text. During sustained fast speech, the queue can deliberately lag behind the speaker. Hidden or stalled browser frames do not consume reading time.
 

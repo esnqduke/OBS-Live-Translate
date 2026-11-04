@@ -43,3 +43,6 @@ if(WIN32)
     set_tests_properties(browser-protocol-tests PROPERTIES TIMEOUT 15)
   endif()
 endif()
+
+add_executable(worker-mute worker-mute.cpp)
+target_link_libraries(worker-mute PRIVATE transcription)

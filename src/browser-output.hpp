@@ -1,6 +1,7 @@
 #pragma once
 #include "browser-bridge.hpp"
 #include "browser-journal.hpp"
+#include "caption-options.hpp"
 #include <obs-module.h>
 #include <util/bmem.h>
 #include <memory>
@@ -42,6 +43,7 @@ public:
  std::string url() const{return server->url();}
  std::string error() const{return journal->error();}
  bool connected() const{return server->connected();}
+ void clear(){journal->clear();}
  void deactivate(){journal->deactivate();}
  std::string state_json() const{return journal->state_json();}
 };
@@ -55,8 +57,41 @@ inline std::string browser_color(int64_t number){
  const char hex[]="0123456789abcdef";std::string color="#";
  for(unsigned shift:{0u,8u,16u}){unsigned c=unsigned(uint64_t(number)>>shift)&255;color+=hex[c>>4];color+=hex[c&15];}return color;
 }
+struct CaptionNumber {const char *setting,*json,*label;int min,max,value,step;};
+inline constexpr CaptionNumber caption_numbers[]={
+ {"caption_reading_ms","readingMs","CaptionReadingMs",100,60000,3000,100},
+ {"caption_character_ms","characterMs","CaptionCharacterMs",0,500,60,10},
+ {"caption_line_interval_ms","lineIntervalMs","CaptionLineIntervalMs",0,30000,1500,100},
+ {"caption_max_rows","maxRows","CaptionMaxRows",1,3,3,1},
+ {"caption_animation_speed","animationSpeed","CaptionAnimationSpeed",10,500,100,10},
+ {"caption_font_size","fontSize","CaptionFontSize",0,200,0,1}
+};
+inline bool caption_has(obs_data_t *s,const char *key){return obs_data_has_user_value(s,key) || obs_data_has_default_value(s,key);}
+inline int caption_number(obs_data_t *s,const CaptionNumber &n){int v=int(std::clamp<int64_t>(caption_has(s,n.setting)?obs_data_get_int(s,n.setting):n.value,n.min,n.max));return std::strcmp(n.json,"fontSize")==0 && v?std::max(12,v):v;}
+inline CaptionOptions caption_options(obs_data_t *s){
+ CaptionOptions o;o.reading_ms=caption_number(s,caption_numbers[0]);o.character_ms=caption_number(s,caption_numbers[1]);o.line_interval_ms=caption_number(s,caption_numbers[2]);
+ o.max_rows=caption_number(s,caption_numbers[3]);o.animation_speed=caption_number(s,caption_numbers[4]);o.font_size=caption_number(s,caption_numbers[5]);
+ o.animations=!caption_has(s,"caption_animations") || obs_data_get_bool(s,"caption_animations");
+ o.partial_results=!caption_has(s,"caption_partial_results") || obs_data_get_bool(s,"caption_partial_results");
+ std::string a=obs_data_get_string(s,"caption_alignment");if(a=="left" || a=="center" || a=="right")o.alignment=a;
+ return o;
+}
+inline void caption_apply_font(obs_data_t *settings,int size){
+ auto *saved=obs_data_get_obj(settings,"font");auto *font=obs_data_create();
+ if(saved){obs_data_apply(font,saved);obs_data_release(saved);}
+ if(!*obs_data_get_string(font,"face"))obs_data_set_string(font,"face","Arial");
+ obs_data_set_int(font,"size",size);obs_data_set_obj(settings,"font",font);obs_data_release(font);
+}
+inline void caption_defaults(obs_data_t *s,bool reset=false){
+ for(const auto &n:caption_numbers){if(reset)obs_data_set_int(s,n.setting,n.value);else obs_data_set_default_int(s,n.setting,n.value);}
+ for(auto key:{"caption_animations","caption_partial_results"}){if(reset)obs_data_set_bool(s,key,true);else obs_data_set_default_bool(s,key,true);}
+ if(reset)obs_data_set_string(s,"caption_alignment","auto");else obs_data_set_default_string(s,"caption_alignment","auto");
+}
 inline std::string browser_config(obs_data_t *settings){
  auto *data=obs_data_create();obs_data_set_string(data,"style",browser_style(settings).c_str());
+ const auto captions=caption_options(settings);
+ for(const auto &n:caption_numbers)obs_data_set_int(data,n.json,caption_number(settings,n));
+ obs_data_set_bool(data,"animations",captions.animations);obs_data_set_bool(data,"partialResults",captions.partial_results);obs_data_set_string(data,"alignment",captions.alignment.c_str());
  std::string background=obs_data_get_string(settings,"background_type");bool valid=false;
  for(auto type:{"auto","none","solid","gradient","parchment","cathay","image"})if(background==type)valid=true;
  obs_data_set_string(data,"background",valid?background.c_str():"auto");

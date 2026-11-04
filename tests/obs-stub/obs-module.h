@@ -13,7 +13,7 @@
 #define MAX_AV_PLANES 8
 enum {LOG_WARNING,LOG_ERROR,LOG_INFO,OBS_TASK_UI,OBS_SOURCE_TYPE_FILTER,OBS_SOURCE_AUDIO,
  OBS_PATH_FILE,OBS_COMBO_TYPE_LIST,OBS_COMBO_FORMAT_STRING,OBS_TEXT_INFO};
-struct obs_source_t {std::string id="text_gdiplus",name="captions";bool enabled=true,removed=false;};
+struct obs_source_t {std::string id="text_gdiplus",name="captions";bool enabled=true,removed=false,muted=false;obs_source_t *parent=nullptr;};
 struct obs_data_t {std::map<std::string,std::string> strings;std::map<std::string,bool> bools;int64_t threads=2;std::map<std::string,int64_t> ints;std::map<std::string,std::shared_ptr<obs_data_t>> objects;std::string json;};
 struct obs_data_array_t {std::vector<std::shared_ptr<obs_data_t>> items;};
 struct obs_property_t {std::string description;std::vector<std::string> items;};
@@ -29,6 +29,8 @@ struct obs_source_info {
  void (*update)(void *,obs_data_t *)=nullptr;
  obs_audio_data *(*filter_audio)(void *,obs_audio_data *)=nullptr;
  void (*video_tick)(void *,float)=nullptr;
+ void (*filter_add)(void *,obs_source_t *)=nullptr;
+ void (*filter_remove)(void *,obs_source_t *)=nullptr;
  obs_properties_t *(*get_properties)(void *)=nullptr;
  void (*get_defaults)(obs_data_t *)=nullptr;
 };
@@ -49,9 +51,12 @@ inline const char *obs_source_get_name(obs_source_t *s){return s->name.c_str();}
 inline const char *obs_source_get_uuid(obs_source_t *){return "test-filter-owner";}
 inline char *obs_module_file(const char *name){auto path=(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"data"/name).u8string();return _strdup(path.c_str());}
 inline bool obs_source_enabled(obs_source_t *s){return s->enabled;}
+inline bool obs_source_muted(obs_source_t *s){return s->muted;}
+inline obs_source_t *obs_filter_get_parent(obs_source_t *s){return s->parent;}
 inline obs_source_t *obs_get_source_by_name(const char *s){if(output_exists && output.name==s){++references;return &output;}return nullptr;}
 inline void obs_source_release(obs_source_t *){--references;}
 inline obs_data_t *obs_data_create(){return new obs_data_t;}
+inline void obs_data_apply(obs_data_t *dst,obs_data_t *src){*dst=*src;}
 inline void obs_data_release(obs_data_t *s){delete s;}
 inline void obs_data_set_bool(obs_data_t *s,const char *k,bool v){s->bools[k]=v;}
 inline bool obs_data_get_bool(obs_data_t *s,const char *k){auto it=s->bools.find(k);return it!=s->bools.end() && it->second;}
@@ -59,6 +64,8 @@ inline void obs_data_set_default_bool(obs_data_t *s,const char *k,bool v){s->boo
 inline void obs_data_set_string(obs_data_t *s,const char *k,const char *v){s->strings[k]=v;}
 inline const char *obs_data_get_string(obs_data_t *s,const char *k){return s->strings[k].c_str();}
 inline void obs_data_set_default_string(obs_data_t *s,const char *k,const char *v){s->strings.emplace(k,v);}
+inline bool obs_data_has_user_value(obs_data_t *s,const char *k){return s->strings.count(k)||s->ints.count(k)||s->bools.count(k);}
+inline bool obs_data_has_default_value(obs_data_t *,const char *){return false;}
 inline int64_t obs_data_get_int(obs_data_t *s,const char *k){return std::string(k)=="cpu_threads"?s->threads:s->ints[k];}
 inline void obs_data_set_int(obs_data_t *s,const char *k,int64_t v){if(std::string(k)=="cpu_threads")s->threads=v;else s->ints[k]=v;}
 inline obs_data_t *obs_data_get_obj(obs_data_t *s,const char *k){auto it=s->objects.find(k);return it==s->objects.end()?nullptr:new obs_data_t(*it->second);}
