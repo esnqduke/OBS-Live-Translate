@@ -30,14 +30,18 @@ Local Russian transcription and Russian → English translation for OBS Studio, 
 | Local inference | Whisper runs inside the DLL; no cloud API, key or separate model server |
 | CPU or Vulkan GPU | Choose the compute mode in the audio filter |
 | Reading comes first | Up to three rows; new lines enter below, previous lines move upward |
-| Time to finish reading | Configurable reading time, per-character timing, row interval and 1?3 visible rows |
+| Time to finish reading | Configurable reading time, per-character timing, row interval and 1–3 visible rows |
 | OBS microphone mute | Cancel recognition, discard buffered speech and clear captions; resume only new speech |
 | Seven visual styles | Plain, Matrix, Console, Cyberpunk, Matrix Rain, Fantasy and Grand Cathay-inspired |
 | Independent backgrounds | Transparent, solid, gradient, parchment, Cathay ornament or a local image |
 | Adjustable appearance | Colors, background opacity, padding, corners, borders and image fit |
 | Offline operation | No internet connection needed after installation and model download |
 
-Caption display controls include animation speed and disable, text size/alignment, partial results, clear and reset. [Full display controls and mute behavior (RU)](docs/CAPTION-CONTROLS-RU.md).
+Tune subtitle timing and presentation directly in the audio filter: minimum reading time, extra time per character, spacing between rows and one to three visible rows. Adjust animation speed from 10% to 500%, turn animations off, choose automatic or manual text size, set alignment and show or hide partial results. Display changes keep the model loaded and preserve unread captions. Clear captions and buffered audio with one button, or restore the display defaults while keeping your model, style and background.
+
+Muting the microphone source in the OBS mixer, including through a hotkey, pauses STT, cancels recognition in progress and clears displayed and queued captions. Unmuting resumes with fresh speech while the model stays loaded. This follows the mute state of the source carrying the filter; hardware mute and a volume slider at zero do not set OBS mute.
+
+See [display controls and mute behavior (RU)](docs/CAPTION-CONTROLS-RU.md) and [release notes](docs/releases/caption-controls-and-obs-mute-2026-11-04.md).
 
 Captions wait their turn instead of replacing unread text. During sustained fast speech, the queue can deliberately lag behind the speaker. Hidden or stalled browser frames do not consume reading time.
 
@@ -125,7 +129,7 @@ The browser acknowledges captions after all their rows receive reading time. Unr
 
 C++17, pinned [whisper.cpp v1.7.6](https://github.com/ggml-org/whisper.cpp/tree/v1.7.6), WinSock, and dependency-free HTML/CSS/Canvas. See [building and tests](docs/BUILDING.md).
 
-The stable baseline was checked with four native test suites, journal/HTTP and real-libobs protocol checks, 20 JavaScript tests, actual Chrome animation/lifecycle captures and a real native bridge acknowledgment test. Its visual result was accepted in OBS on the tested workstation. This does not guarantee identical performance on every PC or compatibility with every OBS release.
+Validation includes eight native test suites and 28 JavaScript tests, worker mute/cancellation checks, and an immediate UI-dispatch regression test. Browser rendering was checked with Chrome animation/lifecycle captures and native bridge acknowledgment checks. OBS 32.2.2 startup with the configured scene and medium model on Vulkan was also verified on the tested workstation. This does not guarantee identical performance on every PC or compatibility with every OBS release.
 
 ## License and acknowledgments
 
