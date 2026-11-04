@@ -11,7 +11,7 @@ Local Russian transcription and Russian → English translation for OBS Studio, 
 [![Renderer](https://img.shields.io/badge/renderer-HTML_%2F_CSS_%2F_Canvas-58a6ff?style=flat-square)](#styles)
 [![License](https://img.shields.io/badge/license-GPL--2.0--or--later-blue?style=flat-square)](LICENSE)
 
-[**Download the stable build**](https://github.com/esnqduke/OBS-Live-Translate/releases/tag/stable-2026-11-04) · [**Windows setup**](docs/INSTALL-WINDOWS.md) · [**Build from source**](docs/BUILDING.md) · [**Русская инструкция**](README-INSTALL-WINDOWS-RU.md)
+[**Download the stable build**](https://github.com/esnqduke/OBS-Live-Translate/releases/latest) · [**Windows setup**](docs/INSTALL-WINDOWS.md) · [**Build from source**](docs/BUILDING.md) · [**Русская инструкция**](README-INSTALL-WINDOWS-RU.md)
 
 ![Matrix code rain rendered by the plugin](docs/media/matrix-rain.gif)
 
@@ -72,7 +72,7 @@ Choose text style and background separately in the **audio filter's settings**. 
 ## Quick start
 
 1. Install [OBS Studio](https://obsproject.com/download) and the [Microsoft Visual C++ v14 Redistributable x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/).
-2. Download the [stable Windows package](https://github.com/esnqduke/OBS-Live-Translate/releases/tag/stable-2026-11-04), close OBS, and copy its `obs-live-translate` folder into:
+2. Download the [stable Windows package](https://github.com/esnqduke/OBS-Live-Translate/releases/latest), close OBS, and copy its `obs-live-translate` folder into:
 
    ```text
    C:\ProgramData\obs-studio\plugins\

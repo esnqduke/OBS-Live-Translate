@@ -31,4 +31,4 @@ UI updates support OBS executing callbacks immediately, including during startup
 
 Close OBS and update the DLL and the complete data folder together. Refresh the Browser Source page cache after updating overlay files. Model downloads and system requirements are unchanged; see [Windows setup](../INSTALL-WINDOWS.md).
 
-The earlier stable release remains a separate download. These notes describe the caption-controls source revision and its corresponding build.
+The earlier stable release remains available as a separate download for rollback.
