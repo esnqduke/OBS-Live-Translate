@@ -1,10 +1,12 @@
 <div align="center">
 
-# OBS Live Translate
+# OBS Live Translate — Offline Russian Speech-to-Text & Live Captions
 
 ### Your voice. Live subtitles. Everything stays on your PC.
 
-Local Russian transcription and Russian → English translation for OBS Studio, powered by Whisper and animated browser overlays.
+A free, open-source OBS Studio plugin for Windows that turns Russian speech into live captions using local Whisper speech recognition (STT). Add Russian subtitles or translate Russian speech into English, with animated browser overlays, seven visual styles, and CPU or Vulkan GPU inference. No cloud API or API key; works offline after installation and model download.
+
+**По-русски:** бесплатный плагин OBS для распознавания русской речи и автоматических субтитров в реальном времени. Работает локально через Whisper, переводит речь с русского на английский и выводит анимированные субтитры на стрим.
 
 [![Platform](https://img.shields.io/badge/platform-Windows_x64-0078D4?style=flat-square)](#requirements)
 [![Inference](https://img.shields.io/badge/inference-local_Whisper-238636?style=flat-square)](#what-it-does)
