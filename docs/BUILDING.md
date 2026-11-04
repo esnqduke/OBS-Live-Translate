@@ -64,3 +64,5 @@ Optional real-model mute check (local PCM16 mono 16kHz fixture required):
 This checks startup mute, cancellation during inference, rapid mute/unmute, fresh speech resumption and a single model load. It does not control a live OBS session.
 
 For a Vulkan-enabled build, append `--gpu` to the worker-mute command to exercise GPU inference and cancellation.
+
+The native UI-dispatch regression runs OBS-style UI tasks synchronously as well as through the existing deferred lifecycle tests. A UI callback must never be dispatched while holding its mailbox mutex: the OBS frontend may run it inline even when wait=false.

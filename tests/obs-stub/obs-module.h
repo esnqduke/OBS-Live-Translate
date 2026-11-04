@@ -42,6 +42,7 @@ inline std::string written;
 inline obs_data_t appearance;
 inline bool written_from_file=false;
 inline std::vector<std::pair<void (*)(void *),void *>> tasks;
+inline bool inline_ui_tasks=false;
 inline void obs_register_source(obs_source_info *p){registered=*p;}
 inline const char *obs_module_text(const char *s){return s;}
 inline void blog(int,const char *,...){}
@@ -80,7 +81,7 @@ inline void obs_data_array_release(obs_data_array_t *a){delete a;}
 inline const char *obs_data_get_json(obs_data_t *s){s->json="{";bool first=true;auto add=[&](const std::string &k,const std::string &v){if(!first)s->json+=',';first=false;s->json+=browser_json_string(k)+":"+v;};for(const auto &p:s->strings)add(p.first,browser_json_string(p.second));for(const auto &p:s->ints)add(p.first,std::to_string(p.second));for(const auto &p:s->bools)add(p.first,p.second?"true":"false");s->json+='}';return s->json.c_str();}
 inline obs_data_t *obs_source_get_settings(obs_source_t *){auto *s=new obs_data_t(appearance);s->strings["text"]=written;s->bools["read_from_file"]=written_from_file;return s;}
 inline void obs_source_update(obs_source_t *,obs_data_t *s){++updates;for(auto &v:s->strings)appearance.strings[v.first]=v.second;for(auto &v:s->ints)appearance.ints[v.first]=v.second;for(auto &v:s->bools)appearance.bools[v.first]=v.second;for(auto &v:s->objects)appearance.objects[v.first]=v.second;if(s->strings.count("text"))written=s->strings["text"];if(s->bools.count("read_from_file"))written_from_file=s->bools["read_from_file"];}
-inline void obs_queue_task(int,void (*fn)(void *),void *p,bool){tasks.emplace_back(fn,p);}
+inline void obs_queue_task(int,void (*fn)(void *),void *p,bool){if(inline_ui_tasks)fn(p);else tasks.emplace_back(fn,p);}
 inline void drain(){auto pending=std::move(tasks);tasks.clear();for(auto &t:pending)t.first(t.second);}
 inline void *obs_source_get_signal_handler(obs_source_t *){return nullptr;}
 inline void signal_handler_connect(void *,const char *,void (*)(void *,calldata_t *),void *){}

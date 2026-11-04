@@ -257,17 +257,21 @@ void probe_browser(Mailbox &box){
 }
 void browser_probe_task(void *opaque){
  std::unique_ptr<std::shared_ptr<Mailbox>> payload(static_cast<std::shared_ptr<Mailbox> *>(opaque));auto box=*payload;
- std::lock_guard<std::mutex> lock(box->mutex);box->scheduled=false;if(!box->active)return;
- probe_browser(*box);
- if(box->pending && !box->browser_selected){box->scheduled=true;obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);}
+ bool schedule=false;
+ {
+  std::lock_guard<std::mutex> lock(box->mutex);box->scheduled=false;if(!box->active)return;
+  probe_browser(*box);
+  if(box->pending && !box->browser_selected){box->scheduled=true;schedule=true;}
+ }
+ if(schedule)obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);
 }
 void animate(void *opaque)
 {
  std::unique_ptr<std::shared_ptr<Mailbox>> payload(static_cast<std::shared_ptr<Mailbox> *>(opaque));
- auto box=*payload;std::lock_guard<std::mutex> lock(box->mutex);
+ auto box=*payload;std::unique_lock<std::mutex> lock(box->mutex);
  box->scheduled=false;
  if(!box->active)return;
- if(box->pending || box->clear_requested){box->scheduled=true;obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);return;}
+ if(box->pending || box->clear_requested){box->scheduled=true;lock.unlock();obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);return;}
  if(box->animation_text.empty())return;
  auto *target=obs_get_source_by_name(box->target.c_str());
  if(is_text(target) && !obs_source_removed(target)){
@@ -457,13 +461,19 @@ bool connect_browser(Filter *f){
 void reset_captions(Filter *f,bool muted)
 {
  auto box=f->mailbox;if(!box)return;
- std::lock_guard<std::mutex> state(box->mutex);
- box->generation=f->worker.reset_audio();box->muted=muted;
- box->events.clear();box->event_bytes=0;box->text.clear();box->pending=false;
- box->rolling.reset();box->layout.reset();box->clear_requested=true;
- if(box->browser)box->browser->clear();
- if(muted){if(box->status!="MicrophoneMuted")box->resume_status=box->status;box->status="MicrophoneMuted";}
- if(!box->scheduled){box->scheduled=true;obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);}
+ bool schedule=false;
+ {
+  std::lock_guard<std::mutex> state(box->mutex);
+  box->generation=f->worker.reset_audio();box->muted=muted;
+  box->events.clear();box->event_bytes=0;box->text.clear();box->pending=false;
+  box->rolling.reset();box->layout.reset();box->clear_requested=true;
+  if(box->browser)box->browser->clear();
+  if(muted){if(box->status!="MicrophoneMuted")box->resume_status=box->status;box->status="MicrophoneMuted";}
+  if(!box->scheduled){box->scheduled=true;schedule=true;}
+ }
+ // OBS may execute a UI task inline, even with wait=false. Never dispatch while
+ // holding the mailbox mutex: publish takes the same mutex.
+ if(schedule)obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);
 }
 void sync_mute(Filter *f,bool muted)
 {
@@ -536,7 +546,7 @@ void tick(void *opaque,float)
  bool schedule=false;
  {std::unique_lock<std::mutex> state(box->mutex,std::try_to_lock);
   if(state && !box->target.empty() && !box->output_taken && box->active && !box->scheduled && (!box->target_resolved || box->browser_selected) && now-box->last_probe>=std::chrono::milliseconds(500)){
-   box->scheduled=true;box->last_probe=now;obs_queue_task(OBS_TASK_UI,browser_probe_task,new std::shared_ptr<Mailbox>(box),false);return;
+   box->scheduled=true;box->last_probe=now;state.unlock();obs_queue_task(OBS_TASK_UI,browser_probe_task,new std::shared_ptr<Mailbox>(box),false);return;
   }
   if(state && !box->output_taken && !box->browser_selected && (box->rolling || box->restyle || box->style=="console" || box->revealed_bytes<box->animation_text.size() || box->cyber_phase!=0) && box->active && !box->scheduled && !box->animation_text.empty() && (box->rolling || now<box->expires) && now-box->last_frame>=std::chrono::milliseconds(50)){
    // One final frame also restores the original appearance when switching to Plain.
