@@ -13,7 +13,7 @@
 #define MAX_AV_PLANES 8
 enum {LOG_WARNING,LOG_ERROR,LOG_INFO,OBS_TASK_UI,OBS_SOURCE_TYPE_FILTER,OBS_SOURCE_AUDIO,
  OBS_PATH_FILE,OBS_COMBO_TYPE_LIST,OBS_COMBO_FORMAT_STRING,OBS_TEXT_INFO};
-struct obs_source_t {std::string id="text_gdiplus",name="captions";bool enabled=true,removed=false;};
+struct obs_source_t {std::string id="text_gdiplus",name="captions";bool enabled=true,removed=false,muted=false;obs_source_t *parent=nullptr;};
 struct obs_data_t {std::map<std::string,std::string> strings;std::map<std::string,bool> bools;int64_t threads=2;std::map<std::string,int64_t> ints;std::map<std::string,std::shared_ptr<obs_data_t>> objects;std::string json;};
 struct obs_data_array_t {std::vector<std::shared_ptr<obs_data_t>> items;};
 struct obs_property_t {std::string description;std::vector<std::string> items;};
@@ -29,6 +29,8 @@ struct obs_source_info {
  void (*update)(void *,obs_data_t *)=nullptr;
  obs_audio_data *(*filter_audio)(void *,obs_audio_data *)=nullptr;
  void (*video_tick)(void *,float)=nullptr;
+ void (*filter_add)(void *,obs_source_t *)=nullptr;
+ void (*filter_remove)(void *,obs_source_t *)=nullptr;
  obs_properties_t *(*get_properties)(void *)=nullptr;
  void (*get_defaults)(obs_data_t *)=nullptr;
 };
@@ -40,6 +42,7 @@ inline std::string written;
 inline obs_data_t appearance;
 inline bool written_from_file=false;
 inline std::vector<std::pair<void (*)(void *),void *>> tasks;
+inline bool inline_ui_tasks=false;
 inline void obs_register_source(obs_source_info *p){registered=*p;}
 inline const char *obs_module_text(const char *s){return s;}
 inline void blog(int,const char *,...){}
@@ -49,9 +52,12 @@ inline const char *obs_source_get_name(obs_source_t *s){return s->name.c_str();}
 inline const char *obs_source_get_uuid(obs_source_t *){return "test-filter-owner";}
 inline char *obs_module_file(const char *name){auto path=(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()/"data"/name).u8string();return _strdup(path.c_str());}
 inline bool obs_source_enabled(obs_source_t *s){return s->enabled;}
+inline bool obs_source_muted(obs_source_t *s){return s->muted;}
+inline obs_source_t *obs_filter_get_parent(obs_source_t *s){return s->parent;}
 inline obs_source_t *obs_get_source_by_name(const char *s){if(output_exists && output.name==s){++references;return &output;}return nullptr;}
 inline void obs_source_release(obs_source_t *){--references;}
 inline obs_data_t *obs_data_create(){return new obs_data_t;}
+inline void obs_data_apply(obs_data_t *dst,obs_data_t *src){*dst=*src;}
 inline void obs_data_release(obs_data_t *s){delete s;}
 inline void obs_data_set_bool(obs_data_t *s,const char *k,bool v){s->bools[k]=v;}
 inline bool obs_data_get_bool(obs_data_t *s,const char *k){auto it=s->bools.find(k);return it!=s->bools.end() && it->second;}
@@ -59,6 +65,8 @@ inline void obs_data_set_default_bool(obs_data_t *s,const char *k,bool v){s->boo
 inline void obs_data_set_string(obs_data_t *s,const char *k,const char *v){s->strings[k]=v;}
 inline const char *obs_data_get_string(obs_data_t *s,const char *k){return s->strings[k].c_str();}
 inline void obs_data_set_default_string(obs_data_t *s,const char *k,const char *v){s->strings.emplace(k,v);}
+inline bool obs_data_has_user_value(obs_data_t *s,const char *k){return s->strings.count(k)||s->ints.count(k)||s->bools.count(k);}
+inline bool obs_data_has_default_value(obs_data_t *,const char *){return false;}
 inline int64_t obs_data_get_int(obs_data_t *s,const char *k){return std::string(k)=="cpu_threads"?s->threads:s->ints[k];}
 inline void obs_data_set_int(obs_data_t *s,const char *k,int64_t v){if(std::string(k)=="cpu_threads")s->threads=v;else s->ints[k]=v;}
 inline obs_data_t *obs_data_get_obj(obs_data_t *s,const char *k){auto it=s->objects.find(k);return it==s->objects.end()?nullptr:new obs_data_t(*it->second);}
@@ -73,7 +81,7 @@ inline void obs_data_array_release(obs_data_array_t *a){delete a;}
 inline const char *obs_data_get_json(obs_data_t *s){s->json="{";bool first=true;auto add=[&](const std::string &k,const std::string &v){if(!first)s->json+=',';first=false;s->json+=browser_json_string(k)+":"+v;};for(const auto &p:s->strings)add(p.first,browser_json_string(p.second));for(const auto &p:s->ints)add(p.first,std::to_string(p.second));for(const auto &p:s->bools)add(p.first,p.second?"true":"false");s->json+='}';return s->json.c_str();}
 inline obs_data_t *obs_source_get_settings(obs_source_t *){auto *s=new obs_data_t(appearance);s->strings["text"]=written;s->bools["read_from_file"]=written_from_file;return s;}
 inline void obs_source_update(obs_source_t *,obs_data_t *s){++updates;for(auto &v:s->strings)appearance.strings[v.first]=v.second;for(auto &v:s->ints)appearance.ints[v.first]=v.second;for(auto &v:s->bools)appearance.bools[v.first]=v.second;for(auto &v:s->objects)appearance.objects[v.first]=v.second;if(s->strings.count("text"))written=s->strings["text"];if(s->bools.count("read_from_file"))written_from_file=s->bools["read_from_file"];}
-inline void obs_queue_task(int,void (*fn)(void *),void *p,bool){tasks.emplace_back(fn,p);}
+inline void obs_queue_task(int,void (*fn)(void *),void *p,bool){if(inline_ui_tasks)fn(p);else tasks.emplace_back(fn,p);}
 inline void drain(){auto pending=std::move(tasks);tasks.clear();for(auto &t:pending)t.first(t.second);}
 inline void *obs_source_get_signal_handler(obs_source_t *){return nullptr;}
 inline void signal_handler_connect(void *,const char *,void (*)(void *,calldata_t *),void *){}

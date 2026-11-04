@@ -43,3 +43,12 @@ if(WIN32)
     set_tests_properties(browser-protocol-tests PROPERTIES TIMEOUT 15)
   endif()
 endif()
+
+add_executable(worker-mute worker-mute.cpp)
+target_link_libraries(worker-mute PRIVATE transcription)
+
+add_executable(ui-dispatch-tests ui-dispatch-tests.cpp)
+target_include_directories(ui-dispatch-tests BEFORE PRIVATE obs-stub)
+target_link_libraries(ui-dispatch-tests PRIVATE transcription)
+add_test(NAME ui-dispatch-tests COMMAND ui-dispatch-tests)
+set_tests_properties(ui-dispatch-tests PROPERTIES TIMEOUT 15)

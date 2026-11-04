@@ -24,7 +24,22 @@ export function resolveConfig(input={}) {
     for(const [key,max] of Object.entries({opacity:100,paddingX:256,paddingY:128,radius:128,borderWidth:32}))out[key]=clamp(input[key],0,max,out[key]);
     if(input.imageFit==='contain')out.imageFit='contain';
   }
+  for(const [key,min,max,fallback] of [['readingMs',100,60000,3000],['characterMs',0,500,60],['lineIntervalMs',0,30000,1500],['maxRows',1,3,3],['animationSpeed',10,500,100],['fontSize',0,200,0]])out[key]=Math.round(clamp(input[key],min,max,fallback));
+  if(out.fontSize)out.fontSize=Math.max(12,out.fontSize);
+  out.alignment=['left','center','right'].includes(input.alignment)?input.alignment:'auto';
+  out.animations=input.animations!==false;out.partialResults=input.partialResults!==false;
   return out;
+}
+export function fitCaptionRows(config,availableHeight){
+  const preferred=['matrix','console','cyber'].includes(config.style)?64:72;
+  const fontSize=config.fontSize||Math.max(12,Math.min(preferred,Math.floor(availableHeight/(config.maxRows*1.3+.15))));
+  const lineHeight=Math.ceil(fontSize*1.23),gap=Math.max(2,Math.round(fontSize*.07));
+  return {fontSize,maxRows:Math.max(0,Math.min(config.maxRows,Math.floor((availableHeight+gap)/(lineHeight+gap))))};
+}
+export function effectDuration(config,reduced=false){
+  if(!config.animations)return 0;
+  const base=config.style==='plain'?0:config.style==='matrix_rain'?880:config.style==='fantasy'?800:config.style==='cathay'?820:650;
+  return (reduced?Math.min(100,base):base)*100/config.animationSpeed;
 }
 export const admissionTime=text=>Math.max(1500,1000+60*Array.from(text).length);
 export const readingTime=text=>Math.max(3000,admissionTime(text));
@@ -71,15 +86,16 @@ export function wrapText(text,measure,width){
   return rows;
 }
 export class CaptionModel {
-  constructor({measure,width,effectMs=650}={}){
+  constructor({measure,width,effectMs=650,readingMs=3000,characterMs=60,lineIntervalMs=1500,maxRows=3}={}){
     this.measure=measure|| (s=>Array.from(s).length);this.width=width??80;
-    this.effectMs=clamp(effectMs,0,900,650);this.session='';this.rows=[];this.records=new Map();
+    this.effectMs=clamp(effectMs,0,9000,650);const options=resolveConfig({readingMs,characterMs,lineIntervalMs,maxRows});for(const key of ['readingMs','characterMs','lineIntervalMs','maxRows'])this[key]=options[key];this.resetSerial=0;this.session='';this.rows=[];this.records=new Map();
     this.cooldown=0;this.serial=0;this.previewSerial=0;this.preview=false;this.active=false;this.error='';
   }
   reset(){this.rows=[];this.records.clear();this.cooldown=0;this.preview=false;this.error='';}
   sync(state){
     if(!state||typeof state.session!=='string')return;
-    if(state.session!==this.session){this.reset();this.session=state.session;this.previewSerial=0;}
+    const reset=Number.isSafeInteger(state.reset)&&state.reset>=0?state.reset:0;
+    if(state.session!==this.session||reset!==this.resetSerial){this.reset();this.session=state.session;this.resetSerial=reset;this.previewSerial=0;}
     this.active=state.active===true;
     if(!this.active){this.reset();return;}
     const incoming=Array.isArray(state.phrases)?state.phrases:[];
@@ -108,9 +124,15 @@ export class CaptionModel {
     }
     this.complete();this.admit();
   }
-  layout({measure=this.measure,width=this.width,effectMs=this.effectMs}={}){
-    this.measure=measure;this.width=width;this.effectMs=clamp(effectMs,0,900,this.effectMs);this.reflow();this.admit();
+  layout({measure=this.measure,width=this.width,effectMs=this.effectMs,readingMs=this.readingMs,characterMs=this.characterMs,lineIntervalMs=this.lineIntervalMs,maxRows=this.maxRows}={}){
+    const options=resolveConfig({readingMs,characterMs,lineIntervalMs,maxRows});
+    for(const key of ['readingMs','characterMs','lineIntervalMs','maxRows'])this[key]=options[key];
+    this.measure=measure;this.width=width;this.effectMs=clamp(effectMs,0,9000,this.effectMs);
+    for(const row of this.rows){const progress=row.effectMs?row.effect/row.effectMs:1;row.effectMs=this.effectMs;row.effect=progress*this.effectMs;}
+    this.reflow();this.admit();
   }
+  interval(text){return this.characterMs?Math.max(this.lineIntervalMs,1000+this.characterMs*Array.from(text).length):this.lineIntervalMs;}
+  reading(text){return this.characterMs?Math.max(this.readingMs,1000+this.characterMs*Array.from(text).length):this.readingMs;}
   reflow(){
     const previous=this.rows;this.rows=[];
     for(const r of this.records.values()){
@@ -120,20 +142,20 @@ export class CaptionModel {
       for(const w of wrapped){
         const start=w.start+r.retired,end=w.end+r.retired;
         const old=previous.find(row=>row.id===r.id&&row.start===start&&row.end===end&&row.text===w.text);
-        if(!old||this.rows.length>=3)break;
+        if(!old||this.rows.length>=this.maxRows)break;
         this.rows.push(old);r.next=end;
       }
     }
     this.cooldown=0;
   }
   admit(){
-    if(this.cooldown>0||this.rows.length>=3)return;
+    if(this.cooldown>0||this.rows.length>=this.maxRows)return;
     for(const r of this.records.values()){
       if(r.next>=r.text.length)continue;
       const w=wrapText(r.text.slice(r.next),this.measure,this.width)[0];
       if(!w)return;
       const row={id:r.id,key:++this.serial,text:w.text,start:r.next,end:r.next+w.text.length,effect:0,effectMs:this.effectMs,read:0};
-      this.rows.push(row);r.next=row.end;this.cooldown=admissionTime(row.text);return;
+      this.rows.push(row);r.next=row.end;this.cooldown=this.interval(row.text);return;
     }
   }
   complete(){
@@ -148,7 +170,7 @@ export class CaptionModel {
       if(row.effect<row.effectMs)row.effect=Math.min(row.effectMs,row.effect+delta);
       else row.read+=delta;
     }
-    while(this.rows.length&&this.rows[0].read>=readingTime(this.rows[0].text)){
+    while(this.rows.length&&this.rows[0].read>=this.reading(this.rows[0].text)){
       const row=this.rows.shift(),r=this.records.get(row.id);if(r)r.retired=Math.max(r.retired,row.end);
     }
     this.complete();this.admit();

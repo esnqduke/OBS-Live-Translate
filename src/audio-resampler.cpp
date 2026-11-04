@@ -3,7 +3,7 @@
 #include <cmath>
 #include <limits>
 
-bool AudioBlockQueue::try_push(const float *const planes[],size_t frames,size_t channels,uint32_t rate)
+bool AudioBlockQueue::try_push(const float *const planes[],size_t frames,size_t channels,uint32_t rate,uint64_t capture_generation)
 {
  if(!planes || !frames || frames>AudioBlock::max_frames || !channels ||
     channels>AudioBlock::max_channels || rate<8000 || rate>192000) return false;
@@ -19,7 +19,7 @@ bool AudioBlockQueue::try_push(const float *const planes[],size_t frames,size_t 
  if(!chosen || !chosen->tag.compare_exchange_strong(expected,(sequence<<2)|1,std::memory_order_acq_rel)){++drops;return false;}
  if((expected&3)==2 && (expected>>2)>=minimum)++drops;
  auto &b=chosen->block;
- b.frames=frames;b.channels=channels;b.rate=rate;b.generation=drops.load();b.discontinuity=false;
+ b.frames=frames;b.channels=channels;b.rate=rate;b.capture_generation=capture_generation;b.generation=drops.load();b.discontinuity=false;
  for(size_t c=0;c<channels;c++)std::copy_n(planes[c],frames,b.samples.data()+c*AudioBlock::max_frames);
  chosen->tag.store((sequence<<2)|2,std::memory_order_release);return true;
 }

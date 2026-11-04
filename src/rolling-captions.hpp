@@ -1,4 +1,5 @@
 #pragma once
+#include "caption-options.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <deque>
@@ -15,12 +16,12 @@ class RollingCaptions {
  std::deque<Row> rows;
  size_t capacity,bytes=0;
  int64_t entrance_ms,next_line=0;
+ CaptionOptions options;
  uint64_t completed=0;
  bool have_completed=false;
  std::function<std::vector<std::string>(const std::string &)> rewrapper;
- static size_t characters(const std::string &text){size_t n=0;for(unsigned char c:text)if((c&0xc0)!=0x80)++n;return n;}
- static int64_t interval(const std::string &text){return std::max<int64_t>(1500,1000+60*int64_t(characters(text)));}
- int64_t deadline(const std::string &text,int64_t now) const{return now+entrance_ms+std::max<int64_t>(3000,interval(text));}
+ int64_t interval(const std::string &text) const{return options.interval(text);}
+ int64_t deadline(const std::string &text,int64_t now) const{return now+entrance_ms+options.reading(text);}
  static bool space(char c){return c==' ' || c=='\n' || c=='\r' || c=='\t';}
  static size_t content_characters(const std::string &text){size_t n=0;for(unsigned char c:text)if(!space(char(c)) && (c&0xc0)!=0x80)++n;return n;}
  static std::string skip(const std::string &text,size_t count){
@@ -37,6 +38,13 @@ class RollingCaptions {
 public:
  static constexpr size_t max_bytes=256*1024,max_phrases=512;
  explicit RollingCaptions(size_t lines=3,int64_t animation_ms=0):capacity(std::clamp<size_t>(lines,1,3)),entrance_ms(animation_ms){}
+ void configure(const CaptionOptions &value,int64_t animation_ms,int64_t now){
+  const bool timing=options.reading_ms!=value.reading_ms || options.character_ms!=value.character_ms;
+  const bool pacing=options.line_interval_ms!=value.line_interval_ms || options.character_ms!=value.character_ms;
+  options=value;entrance_ms=animation_ms;
+  if(timing)for(auto &row:rows)row.read_until=now+options.reading(row.text);
+  if(pacing)next_line=now;
+ }
  bool update(uint64_t id,const std::vector<std::string> &input_lines,bool final,int64_t now,const std::string &input_source={}){
   auto it=std::find_if(phrases.begin(),phrases.end(),[&](const Phrase &p){return p.id==id;});
   if(it==phrases.end() && have_completed && id<=completed)return true;
@@ -87,7 +95,7 @@ public:
  bool pending() const{for(const auto &phrase:phrases)if(phrase.next<phrase.lines.size() || !phrase.final)return true;return false;}
  bool idle(int64_t now) const{if(pending())return false;for(const auto &row:rows)if(!row.readable || now<row.read_until)return false;return true;}
  void mark_readable(size_t revealed_bytes,int64_t now){
-  size_t end=0;for(auto &row:rows){end+=row.text.size();if(end<=revealed_bytes && !row.readable){row.readable=true;row.read_until=now+std::max<int64_t>(3000,interval(row.text));}++end;}
+  size_t end=0;for(auto &row:rows){end+=row.text.size();if(end<=revealed_bytes && !row.readable){row.readable=true;row.read_until=now+options.reading(row.text);}++end;}
  }
  bool reflow(std::function<std::vector<std::string>(const std::string &)> wrap,size_t line_capacity,int64_t now){
   // Requeue only still-visible and pending text. Retired text stays retired.

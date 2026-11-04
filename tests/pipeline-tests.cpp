@@ -32,6 +32,13 @@ int main(){try{
   stream.push_partial(std::vector<float>(16000,5),2);
   check(!stream.pop(job),"late snapshot cannot revive finalized/cancelled utterance");
  }
+ {
+  CompletedSegmentQueue reset;RecognitionInput job;
+  reset.push(std::vector<float>(16000,1),10,4);reset.push_partial(std::vector<float>(16000,2),11,4);
+  reset.clear(11);check(!reset.pop(job) && reset.pending_samples()==0 && !reset.current_partial(11),"mute discards finals and drafts and invalidates active partial");
+  reset.push(std::vector<float>(16000,3),12,8);
+  check(reset.pop(job) && job.generation==8 && job.pcm.front()==3,"new capture generation survives reset");
+ }
  std::atomic<bool> done{false},bad{false};std::atomic<size_t> count{0};
  {
   CompletedSegmentQueue cancelled;RecognitionInput job;

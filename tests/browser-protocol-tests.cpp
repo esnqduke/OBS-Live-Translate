@@ -18,6 +18,11 @@ int main(int argc,char **argv){try{
  auto config=browser_config(settings);auto *decoded=obs_data_create_from_json(config.c_str());
  check(decoded && std::string(obs_data_get_string(decoded,"style"))=="cathay" && obs_data_get_int(decoded,"opacity")==100,"real libobs config JSON normalized");
  obs_data_release(decoded);obs_data_release(settings);
+ auto *original=obs_data_create();auto *original_font=obs_data_create();obs_data_set_string(original_font,"face","Consolas");obs_data_set_int(original_font,"size",64);obs_data_set_obj(original,"font",original_font);
+ auto *styled=obs_data_create();obs_data_set_obj(styled,"font",original_font);caption_apply_font(styled,40);
+ check(obs_data_get_int(original_font,"size")==64,"manual font must preserve original OBS font object");
+ auto *changed_font=obs_data_get_obj(styled,"font");check(obs_data_get_int(changed_font,"size")==40,"manual font applies to independent object");
+ obs_data_release(changed_font);obs_data_release(styled);obs_data_release(original_font);obs_data_release(original);
  std::cout<<"real libobs browser protocol parsing, stale/session checks and config: PASS\n";
  if(argc>1 && std::string(argv[1])=="--serve"){
   auto token=browser_session_token();auto shared=std::make_shared<BrowserJournal>(token);

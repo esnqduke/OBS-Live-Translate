@@ -11,14 +11,14 @@ struct AudioBlock {
  std::vector<float> samples=std::vector<float>(max_frames*max_channels);
  size_t frames=0,channels=0;
  uint32_t rate=0;
- uint64_t generation=0;
+ uint64_t generation=0,capture_generation=0;
  bool discontinuity=false;
 };
 class AudioBlockQueue {
 public:
  static_assert(std::atomic<uint64_t>::is_always_lock_free,"Audio queue requires lock-free 64-bit atomics");
  static constexpr size_t capacity=64;
- bool try_push(const float *const planes[],size_t frames,size_t channels,uint32_t rate);
+ bool try_push(const float *const planes[],size_t frames,size_t channels,uint32_t rate,uint64_t capture_generation=0);
  bool pop(AudioBlock &out);
  void clear();
  uint64_t dropped() const {return drops.load();}

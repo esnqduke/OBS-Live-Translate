@@ -31,7 +31,7 @@ Models are not required to compile; model-backed tests need the exact supported 
 For overlay development with Node.js:
 
 ```powershell
-node --test tests/browser-overlay.test.mjs tests/caption-animation.test.mjs
+node --test tests/browser-overlay.test.mjs tests/caption-animation.test.mjs tests/caption-controls.test.mjs
 ```
 
 The suite covers revisions/ACKs, retention, reading after entrance, hidden/stalled frames, reload, wrapping, bounds and animation behavior. Bounded generated Unicode inputs do not constitute exhaustive coverage.
@@ -54,3 +54,15 @@ Neither tool is a plugin runtime dependency. Animation captures do not measure s
 ## Repository scope
 
 Keep models, builds, dependency downloads, scene backups and machine-specific logs out of Git. Prebuilt packages belong in GitHub Releases; frozen local archives are separate from the source repository.
+
+Optional real-model mute check (local PCM16 mono 16kHz fixture required):
+
+```powershell
+.\build_feature\tests\RelWithDebInfo\worker-mute.exe models/ggml-base.bin .work/russian.raw
+```
+
+This checks startup mute, cancellation during inference, rapid mute/unmute, fresh speech resumption and a single model load. It does not control a live OBS session.
+
+For a Vulkan-enabled build, append `--gpu` to the worker-mute command to exercise GPU inference and cancellation.
+
+The native UI-dispatch regression runs OBS-style UI tasks synchronously as well as through the existing deferred lifecycle tests. A UI callback must never be dispatched while holding its mailbox mutex: the OBS frontend may run it inline even when wait=false.

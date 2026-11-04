@@ -17,9 +17,13 @@ namespace {
 struct Mailbox {
  std::mutex mutex;
  bool active=true,scheduled=false,failed=false,pending=false,clear_requested=false,partial=false;
+ std::string resume_status="Loading";
  std::string target,status="Loading",text,visible,style,animation_text;
  size_t stable=0,revealed_bytes=0;
- bool restyle=false;
+ bool restyle=false,muted=false;
+ uint64_t generation=0;
+ CaptionOptions options;
+ int layout_rows=0,layout_font=0;
  int cyber_phase=0;
  std::chrono::steady_clock::time_point animation_start{},last_frame{};
  std::shared_ptr<obs_data_t> original_style;
@@ -46,6 +50,9 @@ struct Filter {
  unsigned threads=2;
  bool translate_to_english=false;
  bool use_gpu=false;
+ obs_source_t *parent=nullptr;
+ bool muted=false;
+ CaptionOptions options;
  std::atomic<bool> enabled{false};
 };
 bool is_text(obs_source_t *source)
@@ -54,12 +61,6 @@ bool is_text(obs_source_t *source)
 }
 bool is_browser(obs_source_t *source){return source && std::strcmp(obs_source_get_unversioned_id(source),"browser_source")==0;}
 bool browser_only_style(const std::string &style){return style=="matrix_rain" || style=="fantasy" || style=="cathay";}
-size_t caption_hold_ms(const std::string &text)
-{
- size_t characters=0;for(unsigned char c:text)if((c&0xc0)!=0x80)++characters;
- return std::clamp<size_t>(1500+50*characters,2000,7000);
-}
-
 const char *style_ints[]={"color","opacity","outline_size","outline_color","outline_opacity","bk_color","bk_opacity","text_transform"};
 const char *style_bools[]={"outline","gradient","extents_wrap","chatlog_mode","vertical"};
 obs_data_t *copy_style(obs_data_t *settings)
@@ -91,8 +92,8 @@ void decorate(obs_data_t *settings,const std::string &style,bool empty,double se
 std::string animation_frame(Mailbox &box,std::chrono::steady_clock::time_point now)
 {
  const auto &text=box.animation_text;
- if(text.empty() || box.style.empty() || box.style=="plain" || browser_only_style(box.style)){box.revealed_bytes=text.size();return text;}
- double elapsed=std::max(0.0,std::chrono::duration<double>(now-box.animation_start).count());
+ if(!box.options.animations || text.empty() || box.style.empty() || box.style=="plain" || browser_only_style(box.style)){box.revealed_bytes=text.size();return text;}
+ double elapsed=std::max(0.0,std::chrono::duration<double>(now-box.animation_start).count())*box.options.animation_speed/100.0;
  std::vector<size_t> ends;
  for(size_t i=0;i<text.size();++i)if(i+1==text.size() || (static_cast<unsigned char>(text[i+1])&0xc0)!=0x80)ends.push_back(i+1);
  size_t prefix=0;for(auto end:ends)if(end<=box.stable)++prefix;
@@ -113,7 +114,8 @@ std::string animation_frame(Mailbox &box,std::chrono::steady_clock::time_point n
 int64_t milliseconds(std::chrono::steady_clock::time_point now){return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();}
 void render_caption(Mailbox &box,obs_source_t *target,std::chrono::steady_clock::time_point now)
 {
- double seconds=std::chrono::duration<double>(now-box.animation_start).count();
+ double seconds=std::chrono::duration<double>(now-box.animation_start).count()*box.options.animation_speed/100.0;
+ if(!box.options.animations)seconds=10;
  auto frame=animation_frame(box,now);
  box.last_frame=now;
  int phase=box.style=="cyber" && seconds<0.35?int(seconds*14)%2:0;
@@ -125,14 +127,16 @@ void render_caption(Mailbox &box,obs_source_t *target,std::chrono::steady_clock:
   auto *saved=obs_data_get_obj(current,"live_translate_original_style");
   if(saved)box.original_style={saved,obs_data_release};
  }
- if(!box.original_style && (box.rolling || (box.style!="plain" && !box.style.empty())))box.original_style={copy_style(current),obs_data_release};
+ if(!box.original_style && (box.rolling || box.options.font_size || box.options.alignment!="auto" || (box.style!="plain" && !box.style.empty())))box.original_style={copy_style(current),obs_data_release};
  obs_data_release(current);
  auto *settings=box.original_style?copy_style(box.original_style.get()):obs_data_create();
  if(box.original_style){
   obs_data_set_obj(settings,"live_translate_original_style",box.original_style.get());
-  obs_data_set_bool(settings,"live_translate_style_active",box.rolling || (box.style!="plain" && !box.style.empty()));
+  obs_data_set_bool(settings,"live_translate_style_active",box.rolling || box.options.font_size || box.options.alignment!="auto" || (box.style!="plain" && !box.style.empty()));
  }
  decorate(settings,box.style,frame.empty(),seconds);
+ if(box.options.font_size)caption_apply_font(settings,box.options.font_size);
+ if(box.options.alignment!="auto")obs_data_set_string(settings,"align",box.options.alignment.c_str());
  if(box.rolling){
   obs_data_set_string(settings,"valign","bottom");
   obs_data_set_bool(settings,"extents_wrap",false);obs_data_set_bool(settings,"chatlog_mode",false);
@@ -145,7 +149,7 @@ void render_caption(Mailbox &box,obs_source_t *target,std::chrono::steady_clock:
  }
  obs_source_update(target,settings);obs_data_release(settings);box.visible=frame;box.last_frame=now;
  if(box.rolling)box.rolling->mark_readable(box.revealed_bytes,milliseconds(now));
- if(!box.rolling && (box.style=="plain" || box.style.empty()))box.original_style.reset();
+ if(!box.rolling && !box.options.font_size && box.options.alignment=="auto" && (box.style=="plain" || box.style.empty()))box.original_style.reset();
 }
 void change_animation(Mailbox &box,const std::string &text,std::chrono::steady_clock::time_point now)
 {
@@ -181,15 +185,21 @@ void update_roll(Mailbox &box,obs_source_t *target,std::chrono::steady_clock::ti
   int flags=font?int(obs_data_get_int(font,"flags")):1;
   if(font_changed){face=current_face;size=current_size;flags=current_flags;if(box.original_style && current_font)obs_data_set_obj(box.original_style.get(),"font",current_font);}
   if(font)obs_data_release(font);if(current_font)obs_data_release(current_font);if(saved)obs_data_release(saved);obs_data_release(settings);
-  if(!box.layout || width!=box.layout_width || height!=box.layout_height || font_changed){
-   auto layout=std::make_shared<CaptionLayout>(face,size,flags,width,height);
+  const int requested=box.options.font_size;
+  const bool controls_changed=box.layout_rows!=box.options.max_rows || box.layout_font!=requested;
+  if(requested)size=requested;
+  if(!box.layout || width!=box.layout_width || height!=box.layout_height || font_changed || controls_changed){
+   auto layout=std::make_shared<CaptionLayout>(face,size,flags,width,height,requested?requested:64);
+   const auto capacity=std::min<size_t>(layout->rows(),box.options.max_rows);
    if(box.rolling){
-    if(!box.rolling->reflow([layout](const std::string &value){return layout->wrap(value);},layout->rows(),milliseconds(now)))throw std::runtime_error("Caption backlog exceeds resize budget");
+    if(!box.rolling->reflow([layout](const std::string &value){return layout->wrap(value);},capacity,milliseconds(now)))throw std::runtime_error("Caption backlog exceeds resize budget");
     box.restyle=true;
-   }else box.rolling=std::make_unique<RollingCaptions>(layout->rows(),650);
+   }else box.rolling=std::make_unique<RollingCaptions>(capacity,box.options.effect_ms(box.style));
+   box.layout_rows=box.options.max_rows;box.layout_font=requested;
    box.layout=layout;box.layout_width=width;box.layout_height=height;
    box.applied_face=current_face;box.applied_size=current_size;box.applied_flags=current_flags;
   }
+  box.rolling->configure(box.options,box.options.effect_ms(box.style),milliseconds(now));
   for(const auto &event:box.events){
    if(!box.rolling->update(event.utterance,box.layout->wrap(event.text),event.kind==WorkerEvent::Text,milliseconds(now),event.text)){
     box.status="CaptionBacklogFull";box.backlog_failed=true;
@@ -247,17 +257,21 @@ void probe_browser(Mailbox &box){
 }
 void browser_probe_task(void *opaque){
  std::unique_ptr<std::shared_ptr<Mailbox>> payload(static_cast<std::shared_ptr<Mailbox> *>(opaque));auto box=*payload;
- std::lock_guard<std::mutex> lock(box->mutex);box->scheduled=false;if(!box->active)return;
- probe_browser(*box);
- if(box->pending && !box->browser_selected){box->scheduled=true;obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);}
+ bool schedule=false;
+ {
+  std::lock_guard<std::mutex> lock(box->mutex);box->scheduled=false;if(!box->active)return;
+  probe_browser(*box);
+  if(box->pending && !box->browser_selected){box->scheduled=true;schedule=true;}
+ }
+ if(schedule)obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);
 }
 void animate(void *opaque)
 {
  std::unique_ptr<std::shared_ptr<Mailbox>> payload(static_cast<std::shared_ptr<Mailbox> *>(opaque));
- auto box=*payload;std::lock_guard<std::mutex> lock(box->mutex);
+ auto box=*payload;std::unique_lock<std::mutex> lock(box->mutex);
  box->scheduled=false;
  if(!box->active)return;
- if(box->pending || box->clear_requested){box->scheduled=true;obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);return;}
+ if(box->pending || box->clear_requested){box->scheduled=true;lock.unlock();obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);return;}
  if(box->animation_text.empty())return;
  auto *target=obs_get_source_by_name(box->target.c_str());
  if(is_text(target) && !obs_source_removed(target)){
@@ -299,7 +313,7 @@ void publish(void *opaque)
  box->scheduled=false;
  if(!box->active)return;
  if(!box->pending){
-  if(box->clear_requested)clear_owned(*box);
+  if(box->clear_requested && !box->browser_selected)clear_owned(*box);
   box->clear_requested=false;return;
  }
  box->pending=false;box->clear_requested=false;
@@ -323,7 +337,7 @@ void publish(void *opaque)
    box->stable=std::min(common,box->revealed_bytes);box->animation_start=now;box->animation_text=box->text;
   }
   render_caption(*box,target,now);
-  const auto hold=caption_hold_ms(box->text);
+  const auto hold=size_t(box->options.reading(box->text)+box->options.effect_ms(box->style));
   box->expires=std::chrono::steady_clock::now()+std::chrono::milliseconds(hold);
   blog(LOG_INFO,"[obs-live-translate] CaptionPublished kind=%s hold_ms=%zu",box->partial?"partial":"final",hold);
   }
@@ -346,16 +360,18 @@ void expire(const std::shared_ptr<Mailbox> &box,std::chrono::steady_clock::time_
  }
  if(schedule)obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);
 }
-void post(const std::shared_ptr<Mailbox> &box,WorkerEvent event)
+void post(const std::shared_ptr<Mailbox> &box,WorkerEvent event,TranscriptionWorker *worker=nullptr)
 {
  if(event.kind==WorkerEvent::Diagnostic){blog(LOG_INFO,"[obs-live-translate] %s",event.text.c_str());return;}
  bool schedule=false;
  {
   std::lock_guard<std::mutex> lock(box->mutex);
   if(!box->active)return;
+  if(event.kind==WorkerEvent::Status && box->muted){if(!box->failed)box->resume_status=event.text;return;}
   if(event.kind==WorkerEvent::Status && (box->failed || box->backlog_failed || box->output_taken))return;
   if(event.kind==WorkerEvent::Text || event.kind==WorkerEvent::PartialText){
-   if(box->output_taken || box->backlog_failed)return;
+   if(event.kind==WorkerEvent::PartialText && !box->options.partial_results)return;
+   if(box->output_taken || box->backlog_failed || box->muted || (event.utterance && (event.generation!=box->generation || (worker && (worker->paused() || event.generation!=worker->generation())))))return;
    if(box->browser){
     if(event.utterance){if(!box->browser->publish(event.utterance,event.text,event.kind==WorkerEvent::Text)){box->status="CaptionBacklogFull";box->backlog_failed=true;}}
     else box->browser->preview(event.text);
@@ -400,28 +416,30 @@ void stop(Filter *f)
 }
 void start(Filter *f)
 {
- auto box=std::make_shared<Mailbox>();box->target=f->target;box->style=f->style;box->owner=obs_source_get_uuid(f->source);box->browser_config=f->browser_config;box->browser_image=f->browser_image;f->mailbox=box;
+ auto box=std::make_shared<Mailbox>();box->target=f->target;box->style=f->style;box->owner=obs_source_get_uuid(f->source);box->browser_config=f->browser_config;box->browser_image=f->browser_image;f->mailbox=box;box->muted=f->muted;box->generation=f->worker.generation();box->options=f->options;
  if(!obs_source_enabled(f->source)){box->status="Stopped";return;}
  if(f->model.empty()){box->status="ModelMissing";return;}
  // Global Mic/Aux is loaded before the scene's text sources on OBS startup.
  // Resolve the selected name on the UI thread when publishing, not here.
  if(f->target.empty()){box->status="OutputMissing";return;}
  try{
-  f->worker.start(std::filesystem::u8path(f->model),f->threads,[box](WorkerEvent e){post(box,std::move(e));},f->translate_to_english,f->use_gpu);
+  f->worker.start(std::filesystem::u8path(f->model),f->threads,[f,box](WorkerEvent e){post(box,std::move(e),&f->worker);},f->translate_to_english,f->use_gpu);
   f->enabled=true;
  }catch(const std::exception &e){box->status="StartFailed";blog(LOG_ERROR,"[obs-live-translate] %s",e.what());}
 }
 void update(void *opaque,obs_data_t *settings)
 {
  auto *f=static_cast<Filter *>(opaque);std::lock_guard<std::mutex> lock(f->lifecycle);
+ auto options=caption_options(settings);
  std::string style=browser_style(settings);std::string config=browser_config(settings),image=obs_data_get_string(settings,"background_image");
- if(f->mailbox && f->model==obs_data_get_string(settings,"model_path") && f->target==obs_data_get_string(settings,"output_source_name") && f->threads==unsigned(std::clamp<int64_t>(obs_data_get_int(settings,"cpu_threads"),1,32)) && f->translate_to_english==obs_data_get_bool(settings,"translate_to_english") && f->use_gpu==obs_data_get_bool(settings,"use_gpu") && (f->style!=style || f->browser_config!=config || f->browser_image!=image)){
-  std::lock_guard<std::mutex> state(f->mailbox->mutex);f->style=style;f->mailbox->style=style;
+ if(f->mailbox && f->model==obs_data_get_string(settings,"model_path") && f->target==obs_data_get_string(settings,"output_source_name") && f->threads==unsigned(std::clamp<int64_t>(obs_data_get_int(settings,"cpu_threads"),1,32)) && f->translate_to_english==obs_data_get_bool(settings,"translate_to_english") && f->use_gpu==obs_data_get_bool(settings,"use_gpu") ){
+  if(f->style==style && f->browser_config==config && f->browser_image==image)return;
+  std::lock_guard<std::mutex> state(f->mailbox->mutex);f->style=style;f->mailbox->style=style;f->options=options;f->mailbox->options=options;
   f->browser_config=config;f->browser_image=image;f->mailbox->browser_config=config;f->mailbox->browser_image=image;
   if(f->mailbox->browser)f->mailbox->browser->configure(config,image);
   f->mailbox->animation_start=std::chrono::steady_clock::now();f->mailbox->stable=f->mailbox->rolling?f->mailbox->animation_text.size():0;f->mailbox->restyle=true;return;
  }
- stop(f);f->style=style;
+ stop(f);f->style=style;f->options=options;
  f->browser_config=config;f->browser_image=image;
  f->model=obs_data_get_string(settings,"model_path");
  f->target=obs_data_get_string(settings,"output_source_name");
@@ -440,6 +458,46 @@ bool connect_browser(Filter *f){
  box->output_taken=false;box->backlog_failed=false;box->attached_url.clear();if(box->browser)box->browser->deactivate();box->browser.reset();
  probe_browser(*box);return bool(box->browser);
 }
+void reset_captions(Filter *f,bool muted)
+{
+ auto box=f->mailbox;if(!box)return;
+ bool schedule=false;
+ {
+  std::lock_guard<std::mutex> state(box->mutex);
+  box->generation=f->worker.reset_audio();box->muted=muted;
+  box->events.clear();box->event_bytes=0;box->text.clear();box->pending=false;
+  box->rolling.reset();box->layout.reset();box->clear_requested=true;
+  if(box->browser)box->browser->clear();
+  if(muted){if(box->status!="MicrophoneMuted")box->resume_status=box->status;box->status="MicrophoneMuted";}
+  if(!box->scheduled){box->scheduled=true;schedule=true;}
+ }
+ // OBS may execute a UI task inline, even with wait=false. Never dispatch while
+ // holding the mailbox mutex: publish takes the same mutex.
+ if(schedule)obs_queue_task(OBS_TASK_UI,publish,new std::shared_ptr<Mailbox>(box),false);
+}
+void sync_mute(Filter *f,bool muted)
+{
+ const auto token=f->worker.set_paused(muted);const bool changed=f->muted!=muted;
+ bool drift=false;if(f->mailbox){std::lock_guard<std::mutex> state(f->mailbox->mutex);drift=f->mailbox->generation!=token;}
+ if(!changed && !drift)return;
+ f->muted=muted;reset_captions(f,muted);
+ if(changed && !muted && f->mailbox){std::lock_guard<std::mutex> state(f->mailbox->mutex);if(!f->mailbox->failed){auto status=f->mailbox->resume_status;if(status=="Recognizing" || status=="Translating")status=f->translate_to_english?"ListeningEnglish":"Listening";f->mailbox->status=status;}}
+}
+void parent_mute(void *opaque,calldata_t *data)
+{
+ auto *f=static_cast<Filter *>(opaque);std::lock_guard<std::mutex> lock(f->lifecycle);sync_mute(f,calldata_bool(data,"muted"));
+}
+void filter_remove(void *opaque,obs_source_t *)
+{
+ auto *f=static_cast<Filter *>(opaque);
+ if(f->parent){signal_handler_disconnect(obs_source_get_signal_handler(f->parent),"mute",parent_mute,f);f->parent=nullptr;}
+}
+void filter_add(void *opaque,obs_source_t *parent)
+{
+ auto *f=static_cast<Filter *>(opaque);filter_remove(f,nullptr);f->parent=parent;
+ signal_handler_connect(obs_source_get_signal_handler(parent),"mute",parent_mute,f);
+ std::lock_guard<std::mutex> lock(f->lifecycle);sync_mute(f,obs_source_muted(parent));
+}
 void enable(void *opaque,calldata_t *data)
 {
  auto *f=static_cast<Filter *>(opaque);std::lock_guard<std::mutex> lock(f->lifecycle);
@@ -457,6 +515,7 @@ void *create(obs_data_t *settings,obs_source_t *source)
 void destroy(void *opaque)
 {
  auto *f=static_cast<Filter *>(opaque);
+ filter_remove(f,nullptr);
  signal_handler_disconnect(obs_source_get_signal_handler(f->source),"enable",enable,f);
  {std::lock_guard<std::mutex> lock(f->lifecycle);stop(f);}
  delete f;
@@ -464,7 +523,9 @@ void destroy(void *opaque)
 obs_audio_data *audio(void *opaque,obs_audio_data *data)
 {
  auto *f=static_cast<Filter *>(opaque);
- if(!data || !f->enabled.load())return data;
+ auto *parent=obs_filter_get_parent(f->source);
+ if(parent && obs_source_muted(parent))f->worker.set_paused(true);
+ if(!data || !f->enabled.load() || f->worker.paused())return data;
  obs_audio_info info{};
  if(obs_get_audio_info(&info)){
   const float *planes[MAX_AV_PLANES]{};
@@ -480,11 +541,12 @@ void tick(void *opaque,float)
  auto *f=static_cast<Filter *>(opaque);
  std::unique_lock<std::mutex> lock(f->lifecycle,std::try_to_lock);
  if(!lock || !f->mailbox)return;
+ auto *parent=obs_filter_get_parent(f->source);sync_mute(f,parent && obs_source_muted(parent));
  auto box=f->mailbox;lock.unlock();auto now=std::chrono::steady_clock::now();expire(box,now);
  bool schedule=false;
  {std::unique_lock<std::mutex> state(box->mutex,std::try_to_lock);
   if(state && !box->target.empty() && !box->output_taken && box->active && !box->scheduled && (!box->target_resolved || box->browser_selected) && now-box->last_probe>=std::chrono::milliseconds(500)){
-   box->scheduled=true;box->last_probe=now;obs_queue_task(OBS_TASK_UI,browser_probe_task,new std::shared_ptr<Mailbox>(box),false);return;
+   box->scheduled=true;box->last_probe=now;state.unlock();obs_queue_task(OBS_TASK_UI,browser_probe_task,new std::shared_ptr<Mailbox>(box),false);return;
   }
   if(state && !box->output_taken && !box->browser_selected && (box->rolling || box->restyle || box->style=="console" || box->revealed_bytes<box->animation_text.size() || box->cyber_phase!=0) && box->active && !box->scheduled && !box->animation_text.empty() && (box->rolling || now<box->expires) && now-box->last_frame>=std::chrono::milliseconds(50)){
    // One final frame also restores the original appearance when switching to Plain.
@@ -524,6 +586,14 @@ obs_properties_t *properties(void *opaque)
  obs_properties_add_path(p,"model_path",obs_module_text("ModelPath"),OBS_PATH_FILE,"Whisper (*.bin);;All files (*.*)",nullptr);
  auto *list=obs_properties_add_list(p,"output_source_name",obs_module_text("OutputSource"),OBS_COMBO_TYPE_LIST,OBS_COMBO_FORMAT_STRING);
  obs_property_list_add_string(list,obs_module_text("SelectOutput"),"");obs_enum_sources(enumerate,list);
+ for(const auto &n:caption_numbers)obs_properties_add_int(p,n.setting,obs_module_text(n.label),n.min,n.max,n.step);
+ obs_properties_add_bool(p,"caption_animations",obs_module_text("CaptionAnimations"));
+ obs_properties_add_bool(p,"caption_partial_results",obs_module_text("CaptionPartialResults"));
+ auto *alignment=obs_properties_add_list(p,"caption_alignment",obs_module_text("CaptionAlignment"),OBS_COMBO_TYPE_LIST,OBS_COMBO_FORMAT_STRING);
+ for(auto pair:{std::pair<const char *,const char *>{"CaptionAlignAuto","auto"},{"CaptionAlignLeft","left"},{"CaptionAlignCenter","center"},{"CaptionAlignRight","right"}})obs_property_list_add_string(alignment,obs_module_text(pair.first),pair.second);
+ obs_properties_add_text(p,"caption_controls_info",obs_module_text("CaptionControlsInfo"),OBS_TEXT_INFO);
+ obs_properties_add_button(p,"clear_captions",obs_module_text("ClearCaptions"),[](obs_properties_t *,obs_property_t *,void *opaque){auto *f=static_cast<Filter *>(opaque);if(f){std::lock_guard<std::mutex> lock(f->lifecycle);reset_captions(f,f->muted);}return false;});
+ obs_properties_add_button(p,"reset_captions",obs_module_text("ResetCaptionSettings"),[](obs_properties_t *,obs_property_t *,void *opaque){auto *f=static_cast<Filter *>(opaque);if(!f)return false;auto *s=obs_source_get_settings(f->source);caption_defaults(s,true);obs_source_update(f->source,s);obs_data_release(s);return true;});
  auto *styles=obs_properties_add_list(p,"caption_style",obs_module_text("CaptionStyle"),OBS_COMBO_TYPE_LIST,OBS_COMBO_FORMAT_STRING);
  for(auto pair:{std::pair<const char *,const char *>{"StylePlain","plain"},{"StyleMatrix","matrix"},{"StyleConsole","console"},{"StyleCyber","cyber"},{"StyleMatrixRain","matrix_rain"},{"StyleFantasy","fantasy"},{"StyleCathay","cathay"}})obs_property_list_add_string(styles,obs_module_text(pair.first),pair.second);
  obs_properties_add_button(p,"connect_browser",obs_module_text("ConnectBrowser"),[](obs_properties_t *,obs_property_t *,void *data){connect_browser(static_cast<Filter *>(data));return true;});
@@ -566,8 +636,9 @@ extern "C" void register_transcription_source(void)
  info.id="obs_live_translate_transcription_filter";info.type=OBS_SOURCE_TYPE_FILTER;info.output_flags=OBS_SOURCE_AUDIO;
  info.get_name=[](void *){return obs_module_text("TranscriptionFilter");};
  info.create=create;info.destroy=destroy;info.update=update;info.filter_audio=audio;info.get_properties=properties;
- info.video_tick=tick;
+ info.video_tick=tick;info.filter_add=filter_add;info.filter_remove=filter_remove;
  info.get_defaults=[](obs_data_t *s){
+  caption_defaults(s);
   obs_data_set_default_string(s,"caption_style","plain");obs_data_set_default_int(s,"cpu_threads",2);obs_data_set_default_bool(s,"translate_to_english",false);obs_data_set_default_bool(s,"use_gpu",false);
   obs_data_set_default_string(s,"background_type","auto");obs_data_set_default_bool(s,"background_custom",false);obs_data_set_default_string(s,"background_image_fit","cover");
   for(auto pair:{std::pair<const char *,int64_t>{"background_color",0x0f1108},{"background_color2",0x2c301d},{"background_border_color",0x6ba4c5},{"background_opacity",72},{"background_paddingX",32},{"background_paddingY",24},{"background_radius",24},{"background_borderWidth",2}})obs_data_set_default_int(s,pair.first,pair.second);
