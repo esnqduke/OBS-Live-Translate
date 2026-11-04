@@ -1,0 +1,14 @@
+build*/
+.work/
+.deps/
+cmake/.CMakeBuildNumber
+*.zip
+package/
+package_gpu/
+dist/
+tests/russian.wav
+tests/russian.raw
+models/
+docs/superpowers/
+docs/HANDOFF-*.md
+/Install-CaptionStyles.ps1

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OBS Live Translate · Captions</title>
+  <link rel="stylesheet" href="overlay.css">
+  <script type="module" src="overlay.js"></script>
+</head>
+<body>
+  <main id="panel" hidden aria-label="Live translated captions">
+    <div id="backdrop" aria-hidden="true"></div>
+    <svg class="ornament" viewBox="0 0 1200 220" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <g id="cloud"><path d="M0 48h43c25 0 34-25 17-35-13-8-29 1-25 13 4 11 22 7 17-2M20 60h50c42 0 48-39 22-48-21-7-38 11-29 27 7 13 31 7 25-7M54 74h48c26 0 30-25 13-32"/></g>
+        <g id="dragon"><path d="M0 98c23-5 36-27 24-42-11-13-29-5-23 8 4 9 16 6 12-1M20 91c44-12 26-47 55-56 24-7 48 14 28 31-16 15-43-1-28-15M94 39l12-19 13 6 7-14 11 18 23 5-15 13 5 18-21-3-17 14-5-18M120 36l12 4M144 45l15 8M75 34l-7-17M59 43l-15-9M45 60l-17-3M107 68l8 18 13-7M89 76l-3 17-17 1"/><path d="M125 32l-3-17 12 9M138 31l10-16M147 39l23-8M151 48l22 2"/></g>
+        <g id="rune"><path d="M0 0l12-12L24 0 12 12ZM12-25v50M-13 0h50M-6-18l36 36M-6 18l36-36"/></g>
+      </defs>
+      <g class="fantasy-art">
+        <path d="M22 75V23h180M998 23h180v52M22 145v52h180M998 197h180v-52"/>
+        <path d="M34 61V35h90M1076 35h90v26M34 159v26h90M1076 185h90v-26"/>
+        <use href="#rune" x="40" y="110"/><use href="#rune" x="1136" y="110"/>
+        <path d="M240 23h260l100 12 100-12h260M240 197h260l100-12 100 12h260"/>
+        <path d="m583 22 17-12 17 12-17 12Z"/>
+      </g>
+      <g class="cathay-art">
+        <path d="M25 48V20h420l35 10h240l35-10h420v28M25 172v28h420l35-10h240l35 10h420v-28"/>
+        <path d="M40 48V32h305M855 32h305v16M40 172v16h305M855 188h305v-16"/>
+        <use href="#cloud" transform="translate(180 -5) scale(.7)"/><use href="#cloud" transform="translate(1020 -5) scale(-.7 .7)"/>
+        <use href="#cloud" transform="translate(180 225) scale(.7 -.7)"/><use href="#cloud" transform="translate(1020 225) scale(-.7 -.7)"/>
+        <path class="seal" d="M586 9h28v28h-28Z"/><path d="M593 16h14M600 15v16M592 23h16M594 31l6-5 6 5"/>
+      </g>
+    </svg>
+    <svg class="side-dragon dragon-left" viewBox="0 0 180 115" aria-hidden="true"><use href="#dragon"/></svg>
+    <svg class="side-dragon dragon-right" viewBox="0 0 180 115" aria-hidden="true"><use href="#dragon"/></svg>
+    <div id="rows" aria-live="off"></div>
+  </main>
+  <output id="status" role="status" hidden></output>
+</body>
+</html>
